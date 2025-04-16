@@ -4,22 +4,30 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from datetime import datetime
 import hashlib
 
-# Функция для генерации хэш-ключа
+
+# Функция генерации хэш-ключа
 def generate_hash_key(team_id):
-    hash_object = hashlib.sha256(team_id.encode())
-    return hash_object.hexdigest()[:32]
+    return hashlib.sha256(team_id.encode()).hexdigest()[:32]
+
 
 # Основная функция
 def load_hub_team():
     pg_hook = PostgresHook(postgres_conn_id='Postgres_ROZA')
-    src_conn = pg_hook.get_conn()
-    src_cursor = src_conn.cursor()
+    conn = pg_hook.get_conn()
+    cursor = conn.cursor()
 
-    # Получаем уникальные championship_id из RAW слоя
-    src_cursor.execute("select distinct team_id from public.raw_team_members;")
-    team_ids = src_cursor.fetchall()
+    # Новый SQL-запрос: объединяем team_1_id и team_2_id
+    cursor.execute("""
+        with team as (
+            select team_1_id as team_id from public.raw_matches
+            union
+            select team_2_id as team_id from public.raw_matches
+        )
+        select distinct team_id from team where team_id is not null;
+    """)
 
-    # Вставляем в HUB, пропуская дубликаты (ON CONFLICT)
+    team_ids = cursor.fetchall()
+
     for row in team_ids:
         team_id = row[0]
         hash_key = generate_hash_key(team_id)
@@ -29,24 +37,23 @@ def load_hub_team():
         VALUES (%s, %s)
         ON CONFLICT (team_id) DO NOTHING;
         """
+        cursor.execute(insert_sql, (team_id, hash_key))
 
-        src_cursor.execute(insert_sql, (team_id, hash_key))
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-    src_conn.commit()
-    src_cursor.close()
-    src_conn.close()
 
 # DAG
 with DAG(
-    dag_id='load_hub_team',
-    start_date=datetime(2025, 4, 14),
-    schedule_interval=None,
-    catchup=False,
-    default_args={'owner': 'airflow'},
-    tags=['dwh', 'data_vault']
+        dag_id='load_hub_team',
+        start_date=datetime(2025, 4, 14),
+        schedule_interval=None,
+        catchup=False,
+        default_args={'owner': 'airflow'},
+        tags=['dwh', 'data_vault']
 ) as dag:
-
-    load_hub = PythonOperator(
+    load_team_hub = PythonOperator(
         task_id='load_team_hub',
         python_callable=load_hub_team
     )
