@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.operators.python import PythonOperator  # Обновлено с airflow.operators.python_operator
+from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator# Обновлено с airflow.operators.python_operator
 import json
 import requests
 import time
@@ -11,7 +12,7 @@ import psycopg2.extras
 
 # Чтение match_id из JSON файла
 def read_match_ids_from_json():
-    with open('/opt/airflow/dags/matches_data.json', 'r') as f:
+    with open('/opt/airflow/dags/new_matches.json', 'r') as f:
         match_ids = json.load(f)
     return match_ids
 
@@ -108,10 +109,11 @@ def process_and_save_stats():
     save_match_player_stats(match_ids)  # Сохранение статистики в таблицу SQL
 
 
+
 # Определение DAG
 dag = DAG(
     'process_and_save_faceit_stats',
-    default_args={
+default_args={
         'owner': 'airflow',
         'start_date': datetime(2025, 4, 14),
         'retries': 3,
@@ -124,6 +126,25 @@ dag = DAG(
 process_match_stats_task = PythonOperator(
     task_id='process_and_save_match_stats',
     python_callable=process_and_save_stats,
+    dag=dag
+)
+trigger_hub_match = TriggerDagRunOperator(
+    task_id='trigger_hub_match',
+    trigger_dag_id='load_hub_match',
+    wait_for_completion=False,
+    reset_dag_run=True,
+    trigger_rule='all_done',
     dag=dag,
 )
+
+trigger_hub_team = TriggerDagRunOperator(
+    task_id='trigger_hub_team',
+    trigger_dag_id='load_hub_team',
+    wait_for_completion=False,
+    reset_dag_run=True,
+    trigger_rule='all_done',
+    dag=dag
+)
+
+process_match_stats_task >> [trigger_hub_match, trigger_hub_team]
 

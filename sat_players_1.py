@@ -36,7 +36,8 @@ def load_sat_player():
         insert_sql = """
         INSERT INTO data_vault.sat_player (
             player_hash, country, faceit_elo, region, skill_level, nickname
-        ) VALUES (%s, %s, %s, %s, %s, %s);
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (player_hash) DO NOTHING;
         """
 
         cursor.execute(insert_sql, (

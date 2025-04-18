@@ -1,6 +1,7 @@
 import hashlib
 from airflow import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
 
@@ -39,10 +40,10 @@ def load_link_match_championship():
 
         # SQL запрос для вставки в таблицу линка
         insert_sql = """
-        INSERT INTO data_vault.link_match_championship 
-        (link_hk, match_hk, championship_hk)
-        VALUES (%s, %s, %s)
-        """
+              INSERT INTO data_vault.link_match_championship (link_hk, match_hk, championship_hk)
+              VALUES (%s, %s, %s)
+              ON CONFLICT (match_hk) DO NOTHING;
+              """
         cursor.execute(insert_sql, (combined_hash, match_hash, championship_hash))
         conn.commit()  # Сохраняем изменения в БД
 
@@ -63,3 +64,13 @@ with DAG(
         python_callable=load_link_match_championship,
         dag=dag,
     )
+
+    trigger_satellites = TriggerDagRunOperator(
+        task_id='trigger_satellites_after_links',
+        trigger_dag_id='trigger_all_satellites_after_links',
+        wait_for_completion=False,
+        reset_dag_run=True,
+        trigger_rule='all_done'  # можно заменить на 'success' по желанию
+    )
+
+    load_link_match_championship_task >> trigger_satellites

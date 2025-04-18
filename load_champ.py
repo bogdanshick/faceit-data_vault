@@ -1,159 +1,141 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.hooks.postgres_hook import PostgresHook
+from airflow.utils.dates import datetime
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from datetime import timedelta
 import requests
 import json
-from datetime import datetime
-from airflow.utils.dates import days_ago
 import logging
+import os
 
+default_args = {
+    'owner': 'airflow',
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
 
-# Функция для получения всех чемпионатов и сохранения их в JSON
-def fetch_all_tournament_ids():
+# Пути к JSON-файлам
+ALL_CHAMPIONSHIPS_PATH = '/opt/airflow/dags/championships_data.json'
+NEW_CHAMPIONSHIPS_PATH = '/opt/airflow/dags/new_champ.json'
+
+API_URL = "https://open.faceit.com/data/v4/championships"
+API_KEY = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
+GAME = 'cs2'
+
+def update_championship_ids(**context):
+    headers = {'Authorization': f'Bearer {API_KEY}'}
+    limit = 100
+    max_new = 50
     offset = 0
-    limit = 100  # Количество турниров на одну страницу
-    game = 'cs2'
-    api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
-    url = f"https://open.faceit.com/data/v4/championships?game={game}&offset={offset}&limit={limit}&type=past"  # URL для запроса турниров
+    total_seen = 0
+    just_new_ids = []
 
-    headers = {
-        'Authorization': f'Bearer {api_key}'
-    }
+    # Загружаем уже известные championship_id
+    if os.path.exists(ALL_CHAMPIONSHIPS_PATH):
+        with open(ALL_CHAMPIONSHIPS_PATH, 'r') as f:
+            existing_ids = set(json.load(f))
+    else:
+        existing_ids = set()
 
-    # Список для хранения всех championship_id
-    b = []
+    logging.info(f"✅ Уже загружено {len(existing_ids)} championship_id")
 
-    # Ограничение на количество записей
-    max_records = 1000
-
-    # Цикл, который будет увеличивать offset для каждой страницы
-    while len(b) < max_records:
-        # Выполняем запрос
+    # Проходим по 100 за раз, пока не пропустим 1001 чемпионат
+    while len(just_new_ids) < max_new:
+        url = f"{API_URL}?game={GAME}&offset={offset}&limit={limit}&type=past"
+        logging.info(f"🔄 Запрос: {url}")
         response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
 
-        if response.status_code == 200:
-            data = response.json()
-            tournaments = data.get('items', [])
-
-            # Если турнирные записи закончились, выходим из цикла
-            if not tournaments:
-                break
-
-            # Добавляем championship_id в список
-            for tournament in tournaments:
-                championship_id = tournament.get('championship_id')
-                if championship_id:
-                    b.append(championship_id)
-
-                # Если собрали 1000 записей, выходим из цикла
-                if len(b) >= max_records:
-                    break
-
-            # Увеличиваем offset для получения следующей страницы
-            offset += limit
-            # Обновляем URL с новым offset
-            url = f"https://open.faceit.com/data/v4/championships?game={game}&offset={offset}&limit={limit}&type=past"
-
-        else:
-            print(f"Ошибка {response.status_code}: {response.text}")
+        items = data.get('items', [])
+        if not items:
+            logging.info("📭 Пустой ответ — выходим.")
             break
 
-    # Сохраняем все championship_id в JSON файл
-    with open('/opt/airflow/dags/championships_data.json', 'w') as f:
-        json.dump(b, f, indent=4)
+        for item in items:
+            total_seen += 1
+            if total_seen <= 1001:
+                continue  # просто пропускаем
+            champ_id = item.get('championship_id')
+            if champ_id and champ_id not in existing_ids:
+                just_new_ids.append(champ_id)
+                logging.info(f"🆕 Новый championship_id: {champ_id}")
+            if len(just_new_ids) >= max_new:
+                break
 
-    print(f"Всего найдено {len(b)} championship_id. Данные сохранены в 'championships_data.json'.")
+        offset += limit
 
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-
-def fetch_and_load_tournaments_from_ids():
-    api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
-    headers = {
-        'Authorization': f'Bearer {api_key}'
-    }
-
-    # Загружаем список championship_id из файла
-    with open('/opt/airflow/dags/championships_data.json', 'r') as f:
-        tournament_ids = json.load(f)
-
-    # Подключение к базе данных через Airflow Hook
-    pg_hook = PostgresHook(postgres_conn_id="Postgres_ROZA")
-    connection = pg_hook.get_conn()
-    cursor = connection.cursor()
-
-    for tournament_id in tournament_ids:
-        url = f"https://open.faceit.com/data/v4/championships/{tournament_id}"
-        response = requests.get(url, headers=headers)
-
-        if response.status_code == 200:
-            tournament = response.json()
-
-            # Получаем нужные поля
-            championship_id = tournament.get('championship_id')
-            description = tournament.get('description', '')
-            faceit_url = tournament.get('faceit_url', '')
-            game_id = tournament.get('game_id')
-            name = tournament.get('name')
-            region = tournament.get('region')
-            status = tournament.get('status')
-            total_groups = tournament.get('total_groups', 0)
-            total_prizes = tournament.get('total_prizes', 0)
-            total_rounds = tournament.get('total_rounds', 0)
-
-            # SQL-запрос с обработкой конфликта
-            insert_sql = """
-                INSERT INTO raw_tournaments (
-                    championship_id, description, faceit_url, game_id,
-                    name, region, status, total_groups, total_prizes, total_rounds, load_date
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (championship_id) DO NOTHING
-            """
-
-            try:
-                cursor.execute(insert_sql, (
-                    championship_id, description, faceit_url, game_id,
-                    name, region, status, total_groups, total_prizes, total_rounds,
-                    datetime.utcnow()
-                ))
-            except Exception as e:
-                logging.error(f"❌ Ошибка при вставке данных для championship_id {championship_id}: {e}")
-
-        else:
-            logging.error(f"⚠️ Ошибка при получении данных для tournament ID {tournament_id}: {response.status_code}")
-
-    connection.commit()
-    cursor.close()
-    logging.info("✅ Загрузка завершена.")
+    if just_new_ids:
+        # Обновим all_ids
+        updated_ids = list(existing_ids.union(just_new_ids))
+        with open(ALL_CHAMPIONSHIPS_PATH, 'w') as f:
+            json.dump(updated_ids, f, indent=2)
+        with open(NEW_CHAMPIONSHIPS_PATH, 'w') as f:
+            json.dump(just_new_ids, f, indent=2)
+        context['ti'].xcom_push(key='new_ids_found', value=True)
+        logging.info(f"✅ Найдено и записано {len(just_new_ids)} новых championship_id")
+    else:
+        context['ti'].xcom_push(key='new_ids_found', value=False)
+        logging.info("🟡 Новых championship_id не найдено.")
 
 
+# === Определение DAG ===
+with DAG(
+    dag_id='update_championship_ids_dag',
+    description='Обновляет JSON с ID чемпионатов CS2 и запускает зависимые DAG\'и при наличии новых',
+    schedule_interval='0 0 */3 * *',  # раз в 3 дня в 00:00
+    start_date=datetime(2025, 4, 17),
+    catchup=False,
+    default_args=default_args,
+    tags=['faceit', 'championships', 'cs2']
+) as dag:
 
-# Даг для загрузки турниров и их данных
-dag = DAG(
-    'load_tournaments_to_raw_layer',
-    description='Load tournament data into Raw Layer every day and fetch tournament IDs weekly',
-    schedule_interval='@daily',  # Запускать каждый день
-    start_date=days_ago(1),  # Начать с 1 дня назад
-    catchup=False  # Не запускать на предыдущие дни
-)
+    check_and_trigger_results = PythonOperator(
+        task_id='update_championship_ids',
+        python_callable=update_championship_ids,
+        provide_context=True,
+    )
 
-# Операторы для выполнения задач
 
-# Задача 1: Загрузка всех ID турниров раз в неделю
-fetch_ids_task = PythonOperator(
-    task_id='fetch_all_tournament_ids',
-    python_callable=fetch_all_tournament_ids,
-    dag=dag,
-)
+    trigger_results_dag = TriggerDagRunOperator(
+        task_id='trigger_championship_results_loader',
+        trigger_dag_id='load_championship_results',
+        wait_for_completion=False,
+        poke_interval=60,
+        reset_dag_run=True,
+        trigger_rule='all_done'
+    )
 
-# Задача 2: Загрузка данных о турнире
-load_tournaments_task = PythonOperator(
-    task_id='load_tournaments_from_ids',
-    python_callable=fetch_and_load_tournaments_from_ids,
-    dag=dag
-)
+    trigger_matches_dag = TriggerDagRunOperator(
+        task_id='trigger_faceit_matches_loader',
+        trigger_dag_id='load_faceit_matches',
+        wait_for_completion=False,
+        poke_interval=60,
+        reset_dag_run=True,
+        trigger_rule='all_done'
+    )
 
-# Задачи выполняются последовательно
-fetch_ids_task >> load_tournaments_task
+    trigger_save_players_dag = TriggerDagRunOperator(
+        task_id='trigger_save_players_to_json',
+        trigger_dag_id='save_unique_players_to_json',
+        wait_for_completion=False,
+        poke_interval=60,
+        reset_dag_run=True,
+        trigger_rule='all_done'
+    )
+
+    trigger_championship_details_dag = TriggerDagRunOperator(
+        task_id='trigger_load_championship_details',
+        trigger_dag_id='load_championship_details',
+        wait_for_completion=False,
+        poke_interval=60,
+        reset_dag_run=True,
+        trigger_rule='all_done'
+    )
+
+    check_and_trigger_results >> [
+        trigger_results_dag,
+        trigger_matches_dag,
+        trigger_save_players_dag,
+        trigger_championship_details_dag
+    ]

@@ -45,9 +45,11 @@ def load_link_match_team():
 
         # Вставка в таблицу match_team_link (match_hash, team1_hash, team2_hash, winner_hash)
         insert_sql = """
-        INSERT INTO data_vault.match_team_link (match_hash, team1_hash, team2_hash, winner_hash)
-        VALUES (%s, %s, %s, %s);
-        """
+               INSERT INTO data_vault.match_team_link (
+                   match_hash, team1_hash, team2_hash, winner_hash
+               ) VALUES (%s, %s, %s, %s)
+               ON CONFLICT (match_hash) DO NOTHING;
+               """
 
         try:
             src_cursor.execute(insert_sql, (match_hash, team_1_hash, team_2_hash, winner_hash))

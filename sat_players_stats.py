@@ -44,7 +44,8 @@ def load_sat_player_match_stats():
                 kills_deaths_ratio, kills_per_round, mvps,
                 triple_kills, quadro_kills, penta_kills
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (match_hash, player_hash) DO NOTHING;
         """
 
         cursor.execute(insert_sql, (

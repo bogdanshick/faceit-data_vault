@@ -1,5 +1,6 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.hooks.postgres_hook import PostgresHook
 from airflow.utils.dates import days_ago
 from datetime import datetime, timedelta
@@ -10,13 +11,13 @@ import time
 import os
 
 def load_championship_results():
-    file_path = '/opt/airflow/dags/championships_data.json'
+    file_path = '/opt/airflow/dags/new_champ.json'
     base_url = "https://open.faceit.com/data/v4/championships/{champ_id}/results"
     api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
     headers = {'Authorization': f'Bearer {api_key}'}
 
     if not os.path.exists(file_path):
-        logging.warning("Файл championships_data.json не найден.")
+        logging.warning("Файл new_champ.json не найден.")
         return
 
     with open(file_path, 'r') as f:
@@ -66,22 +67,19 @@ def load_championship_results():
                         datetime.now().date()
                     ))
                     total_inserted += 1
-                    break  # Прерываем цикл, так как данных для чемпионата нет
+                    break
 
                 for item in items:
-                    # Извлекаем данные о местах
                     left = item.get("bounds", {}).get("left")
                     right = item.get("bounds", {}).get("right")
                     placement_range = f"{left}" if left == right else f"{left}-{right}"
 
-                    # Перебираем все команды в placements
                     placements = item.get("placements", [])
                     for placement in placements:
                         team_id = placement.get("id")
                         team_name = placement.get("name")
                         team_type = placement.get("type")
 
-                        # Проверяем, что команда присутствует, прежде чем вставить в базу
                         if team_id and team_name:
                             cursor.execute(insert_query, (
                                 champ_id,
@@ -109,7 +107,6 @@ def load_championship_results():
     logging.info("🏁 Все чемпионаты успешно загружены.")
 
 
-
 # === DAG definition ===
 default_args = {
     'owner': 'airflow',
@@ -132,3 +129,12 @@ with DAG(
         python_callable=load_championship_results,
         execution_timeout=timedelta(hours=1),
     )
+
+    trigger_extract_team_ids = TriggerDagRunOperator(
+        task_id='trigger_extract_team_ids_to_json',
+        trigger_dag_id='extract_team_ids_to_json',
+        wait_for_completion=False,
+        trigger_rule='all_success',
+    )
+
+    load_results >> trigger_extract_team_ids

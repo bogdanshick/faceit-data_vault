@@ -38,11 +38,11 @@ def load_sat_player_team_history():
         team_hk = generate_hash_key(team_id)
 
         insert_sql = """
-        INSERT INTO data_vault.sat_player_team_history (
-            player_hk, team_hk, leader_id, nickname
-        ) VALUES (%s, %s, %s, %s)
-        ON CONFLICT DO NOTHING;
-        """
+                   INSERT INTO data_vault.sat_player_team_history (
+                       player_hk, team_hk, leader_id, nickname
+                   ) VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (player_hk, team_hk) DO NOTHING;
+               """
 
         try:
             cursor.execute(insert_sql, (player_hk, team_hk, leader_id, nickname))

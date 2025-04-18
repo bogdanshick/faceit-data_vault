@@ -14,7 +14,7 @@ import os
 def load_team_data_to_postgres():
     api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'  # Пример ключа API
     headers = {'Authorization': f'Bearer {api_key}'}
-    file_path = '/opt/airflow/dags/team_ids.json'  # Путь к JSON файлу с уникальными team_id
+    file_path = '/opt/airflow/dags/new_team.json'  # Путь к JSON файлу с уникальными team_id
 
     if not os.path.exists(file_path):
         logging.warning("⚠️ Файл с team_id не найден.")

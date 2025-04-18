@@ -27,13 +27,14 @@ def load_link_player_team():
         team_id = row[1]
 
         player_hash = generate_hash_key(player_id)
-        team_hash = generate_hash_key(team_id) if team_id else None
+        team_hash = generate_hash_key(team_id) if team_id else 'UNKNOWN_TEAM'
 
         print(f"Attempt insert: player_id={player_id}, team_id={team_id}, player_hash={player_hash}, team_hash={team_hash}")
 
         insert_sql = """
-        INSERT INTO data_vault.link_player_team (player_hash, team_hash, load_date)
-        VALUES (%s, %s, NOW());
+            INSERT INTO data_vault.link_player_team (player_hash, team_hash, load_date)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (player_hash, team_hash) DO NOTHING;
         """
 
         try:

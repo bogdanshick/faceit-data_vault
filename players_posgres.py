@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.hooks.postgres_hook import PostgresHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.dates import days_ago
 from datetime import timedelta
 import json
@@ -13,7 +14,7 @@ import os
 def load_player_data_to_postgres():
     api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
     headers = {'Authorization': f'Bearer {api_key}'}
-    file_path = '/opt/airflow/dags/unique_players.json'
+    file_path = '/opt/airflow/dags/new_players.json'
 
     if not os.path.exists(file_path):
         logging.warning("⚠️ Файл с player_id не найден.")
@@ -132,5 +133,15 @@ load_players_task = PythonOperator(
     dag=dag,
     execution_timeout=timedelta(hours=2),
 )
+
+trigger_task = TriggerDagRunOperator(
+    task_id='trigger_hub_dag',
+    trigger_dag_id='load_hub_player',
+    dag=dag,
+    wait_for_completion=True,
+)
+
+load_players_task >> trigger_task
+
 
 

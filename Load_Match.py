@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.hooks.postgres_hook import PostgresHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.dates import days_ago
 import json
 import requests
@@ -12,7 +13,7 @@ def fetch_and_load_matches_by_championships():
     api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
     headers = {'Authorization': f'Bearer {api_key}'}
 
-    with open('/opt/airflow/dags/championships_data.json', 'r') as f:
+    with open('/opt/airflow/dags/new_champ.json', 'r') as f:
         championship_ids = json.load(f)
 
     pg_hook = PostgresHook(postgres_conn_id="Postgres_ROZA")
@@ -82,7 +83,7 @@ def fetch_and_load_matches_by_championships():
 dag = DAG(
     'load_faceit_matches',
     description='Load FACEIT matches data to raw_matches',
-    schedule_interval='@daily',
+    schedule_interval=None,
     start_date=days_ago(1),
     catchup=False,
 )
@@ -92,4 +93,14 @@ load_matches_task = PythonOperator(
     python_callable=fetch_and_load_matches_by_championships,
     dag=dag,
 )
+
+trigger_next_dag = TriggerDagRunOperator(
+    task_id='trigger_download_unique_matches',
+    trigger_dag_id='download_unique_matches',  # ID DAG-а, который нужно запустить
+    wait_for_completion=True,  # Ждать завершения следующего DAG (опционально)
+    dag=dag
+)
+
+# Зависимости: сначала загрузка матчей, потом запуск следующего DAG-а
+load_matches_task >> trigger_next_dag
 

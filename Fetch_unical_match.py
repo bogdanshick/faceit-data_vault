@@ -1,44 +1,47 @@
 from airflow import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.python_operator import PythonOperator
-import json
 from datetime import datetime
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+import json
+import os
 
+# Пути к файлам
+FULL_PATH = '/opt/airflow/dags/matches_data.json'
+NEW_PATH = '/opt/airflow/dags/new_matches.json'
 
-# Функция для получения уникальных матчей из базы данных
 def get_unique_matches():
-    # Подключение к базе данных через PostgresHook
-    hook = PostgresHook(postgres_conn_id='Postgres_ROZA')  # Убедитесь, что правильный Conn ID
-    conn = hook.get_conn()
-    cursor = conn.cursor()
+    hook = PostgresHook(postgres_conn_id='Postgres_ROZA')
+    records = hook.get_records("SELECT DISTINCT match_id FROM raw_matches;")
+    return [r[0] for r in records]
 
-    # SQL запрос для получения уникальных матчей
-    cursor.execute("SELECT DISTINCT match_id FROM raw_matches;")
-    match_ids = cursor.fetchall()
+def save_matches_to_json():
+    current_ids = get_unique_matches()
 
-    # Закрываем соединение
-    cursor.close()
-    conn.close()
+    # Загружаем уже сохранённые ID
+    if os.path.exists(FULL_PATH):
+        with open(FULL_PATH, 'r') as f:
+            existing_ids = set(json.load(f))
+    else:
+        existing_ids = set()
 
-    # Извлекаем только значения match_id
-    return [match_id[0] for match_id in match_ids]
+    # Определяем новые ID
+    new_ids = [mid for mid in current_ids if mid not in existing_ids]
 
+    # Обновляем основной файл
+    all_ids = list(existing_ids.union(current_ids))
+    with open(FULL_PATH, 'w') as f:
+        json.dump(all_ids, f, indent=4)
 
-# Функция для сохранения матчей в JSON файл
-def save_matches_to_json(matches_data):
-    with open('/opt/airflow/dags/matches_data.json', 'w') as f:
-        json.dump(matches_data, f, indent=4)
+    # Перезаписываем файл с новыми матчами
+    with open(NEW_PATH, 'w') as f:
+        json.dump(new_ids, f, indent=4)
 
+    print(f"✅ Всего уникальных match_id: {len(all_ids)}")
+    print(f"➕ Новых match_id за запуск: {len(new_ids)}")
+    print(f"📦 Обновлён: {FULL_PATH}")
+    print(f"🆕 Новый: {NEW_PATH}")
 
-# Основная логика в DAG
-def process_matches():
-    match_ids = get_unique_matches()
-
-    # Просто сохраняем список match_id
-    save_matches_to_json(match_ids)
-
-
-# Определение DAG
 dag = DAG(
     'download_unique_matches',
     default_args={
@@ -46,13 +49,22 @@ dag = DAG(
         'start_date': datetime(2025, 4, 14),
         'retries': 3,
     },
-    schedule_interval=None,  # Запуск вручную
+    schedule_interval=None,
     catchup=False,
 )
 
-# Операторы
 download_and_save_task = PythonOperator(
     task_id='download_and_save_matches',
-    python_callable=process_matches,
+    python_callable=save_matches_to_json,
     dag=dag,
 )
+
+trigger_next_dag = TriggerDagRunOperator(
+    task_id='trigger_download_unique_matches',
+    trigger_dag_id='process_and_save_faceit_stats',  # ID DAG-а, который нужно запустить
+    wait_for_completion=True,  # Ждать завершения следующего DAG (опционально)
+    dag=dag
+)
+
+# Зависимости: сначала загрузка матчей, потом запуск следующего DAG-а
+download_and_save_task >> trigger_next_dag

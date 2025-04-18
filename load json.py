@@ -1,28 +1,27 @@
-# first_dag.py
-
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.dagrun_operator import TriggerDagRunOperator
-from airflow.utils.dates import days_ago
-from datetime import timedelta
 import json
 import requests
 import logging
 import time
 import os
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.utils.dates import days_ago
+from datetime import timedelta
 
 def save_unique_players_to_json():
     api_key = '3f7d70c4-f8ca-42c9-98cb-3d1bdcc34ba7'
     headers = {'Authorization': f'Bearer {api_key}'}
-    file_path = '/opt/airflow/dags/unique_players.json'
+    all_players_path = '/opt/airflow/dags/unique_players.json'
+    new_players_path = '/opt/airflow/dags/new_players.json'
 
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
+    if os.path.exists(all_players_path):
+        with open(all_players_path, 'r') as f:
             existing_ids = set(json.load(f))
     else:
         existing_ids = set()
 
-    with open('/opt/airflow/dags/championships_data.json', 'r') as f:
+    with open('/opt/airflow/dags/new_champ.json', 'r') as f:
         championships_data = json.load(f)
 
     new_ids = set()
@@ -56,7 +55,7 @@ def save_unique_players_to_json():
                         if player_id and player_id not in existing_ids:
                             new_ids.add(player_id)
 
-            logging.info(f"  -> {len(matches)} матчей обработано, найдено уникальных игроков: {len(new_ids)}")
+            logging.info(f"  -> {len(matches)} матчей обработано, найдено новых игроков: {len(new_ids)}")
 
             if len(matches) < limit:
                 break
@@ -64,10 +63,13 @@ def save_unique_players_to_json():
 
     combined_ids = list(existing_ids.union(new_ids))
 
-    with open(file_path, 'w') as f:
+    with open(all_players_path, 'w') as f:
         json.dump(combined_ids, f, indent=4)
 
-    logging.info(f"Добавлено {len(new_ids)} новых player_id. Всего в файле: {len(combined_ids)}. Обработано матчей: {total_matches}")
+    with open(new_players_path, 'w') as f:
+        json.dump(list(new_ids), f, indent=4)
+
+    logging.info(f"🆕 Добавлено {len(new_ids)} новых player_id. Всего в файле: {len(combined_ids)}. Обработано матчей: {total_matches}")
 
 
 # === DAG Definition ===
@@ -79,8 +81,8 @@ default_args = {
 
 dag = DAG(
     'save_unique_players_to_json',
-    description='Fetch unique players and save them to JSON',
-    schedule_interval='@daily',
+    description='Fetch unique players and save them to JSON (with new_players.json)',
+    schedule_interval=None,
     start_date=days_ago(1),
     catchup=False,
     default_args=default_args,
@@ -93,12 +95,12 @@ save_players_task = PythonOperator(
     execution_timeout=timedelta(minutes=30),
 )
 
-# Добавляем триггер для второго DAG
+# Триггер второго DAG
 trigger_task = TriggerDagRunOperator(
     task_id='trigger_second_dag',
-    trigger_dag_id='load_players_to_postgres',  # Указываем ID второго DAG
+    trigger_dag_id='load_players_to_postgres',
     dag=dag,
-    wait_for_completion=True,  # Ожидание завершения второго DAG
+    wait_for_completion=True,
 )
 
 save_players_task >> trigger_task

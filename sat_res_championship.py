@@ -35,7 +35,8 @@ def load_sat_championship_result():
             INSERT INTO data_vault.sat_championship_result (
                 championship_hash, team_hash, team_name, team_type, placement_range
             )
-            VALUES (%s, %s, %s, %s, %s);
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (championship_hash, team_hash) DO NOTHING;
         """
 
         cursor.execute(insert_sql, (

@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from datetime import datetime
 import hashlib
 
@@ -50,3 +51,13 @@ with DAG(
         task_id='load_match_hub',
         python_callable=load_hub_match
     )
+
+    trigger_wait_for_hubs = TriggerDagRunOperator(
+        task_id='trigger_wait_for_hubs_and_links',
+        trigger_dag_id='wait_for_hubs_and_trigger_links',
+        wait_for_completion=False,
+        reset_dag_run=True,
+        trigger_rule='all_done'  # даже если load_hub_match упал — будет попытка запустить
+    )
+
+    load_hub >> trigger_wait_for_hubs

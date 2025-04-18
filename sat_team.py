@@ -39,7 +39,8 @@ def load_sat_team():
 
         insert_sql = """
             INSERT INTO data_vault.sat_team (team_hash, team_id, team_name)
-            VALUES (%s, %s, %s);
+            VALUES (%s, %s, %s)
+            ON CONFLICT (team_hash, team_name) DO NOTHING;
         """
 
         cursor.execute(insert_sql, (team_hash, team_id, team_name))
